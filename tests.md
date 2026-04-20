@@ -12,12 +12,12 @@ This document outlines the validation procedures for the surgical deployment of 
 
 ## 2. Integration: Data Pipeline [KPI DRIVEN]
 - **Latency Check**: P95 response must be < 2000ms.
-- **Persistence Check**: Every success must write to `decisions` AND increment `users.usageCount` atomically.
+- **Persistence Check**: Every success must write to `decisions` AND increment `profiles.usage_count` atomically.
 
 ## 3. Security: Auth Barrier [ROBUST]
-- [x] Rule 1: No read/write to `users` if `uid` mismatch.
-- [x] Rule 2: Force max 5 generations via `usageCount` validator.
-- [x] Rule 3: Deny unauthenticated writes if `userId` is not "demo".
+- [x] Rule 1: No read/write to `profiles` if `id` mismatch.
+- [x] Rule 2: Force max 5 generations via `usage_count` validator (RLS + App check).
+- [x] Rule 3: Deny unauthenticated writes to sensitive logs or other's decisions.
 
 ## 4. UI/UX: Frictionless Check
 - [ ] Verify first-load under 500ms.

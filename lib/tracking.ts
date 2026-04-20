@@ -1,5 +1,4 @@
-import { doc, getDoc, setDoc, updateDoc, increment, serverTimestamp, collection, addDoc } from 'firebase/firestore';
-import { db, auth } from './firebase';
+import { supabase } from './supabase';
 
 export interface UsageStatus {
   canProceed: boolean;
@@ -8,7 +7,7 @@ export interface UsageStatus {
 }
 
 export const checkUsage = async (): Promise<UsageStatus> => {
-  const user = auth.currentUser;
+  const { data: { user } } = await supabase.auth.getUser();
   
   if (!user) {
     const demoUsed = typeof window !== 'undefined' && localStorage.getItem('kill_switch_demo_used');
@@ -18,59 +17,70 @@ export const checkUsage = async (): Promise<UsageStatus> => {
     return { canProceed: true, count: 0 };
   }
 
-  const userRef = doc(db, 'users', user.uid);
-  const userSnap = await getDoc(userRef);
+  const { data: profile, error } = await supabase
+    .from('profiles')
+    .select('usage_count')
+    .eq('id', user.id)
+    .single();
 
-  if (!userSnap.exists()) {
-    await setDoc(userRef, {
-      usageCount: 0,
-      email: user.email,
-      createdAt: serverTimestamp()
-    });
+  if (error || !profile) {
     return { canProceed: true, count: 0 };
   }
 
-  const data = userSnap.data();
-  if (data.usageCount >= 5) {
-    return { canProceed: false, reason: 'Usage cap reached (5/5)', count: data.usageCount };
+  if (profile.usage_count >= 5) {
+    return { canProceed: false, reason: 'Usage cap reached (5/5)', count: profile.usage_count };
   }
 
-  return { canProceed: true, count: data.usageCount };
+  return { canProceed: true, count: profile.usage_count };
 };
 
 export const logDecision = async (userId: string | 'demo', decisionData: any) => {
   try {
-    await addDoc(collection(db, 'decisions'), {
-      ...decisionData,
-      userId,
-      createdAt: serverTimestamp()
-    });
+    const { data, error } = await supabase
+      .from('decisions')
+      .insert({
+        ...decisionData,
+        user_id: userId,
+        created_at: new Date().toISOString()
+      })
+      .select('id')
+      .single();
+
+    if (error) throw error;
 
     if (userId !== 'demo') {
-      const userRef = doc(db, 'users', userId);
-      await updateDoc(userRef, {
-        usageCount: increment(1),
-        lastRequestAt: serverTimestamp()
-      });
+      const { data: profile } = await supabase.from('profiles').select('usage_count').eq('id', userId).single();
+      await supabase
+        .from('profiles')
+        .update({
+          usage_count: (profile?.usage_count || 0) + 1,
+          last_request_at: new Date().toISOString()
+        })
+        .eq('id', userId);
     } else {
       if (typeof window !== 'undefined') {
         localStorage.setItem('kill_switch_demo_used', 'true');
       }
     }
+    return data.id;
   } catch (error) {
     console.error('Error logging decision:', error);
+    return null;
   }
 };
 
 export const logAppEvent = async (event: string, metadata: any = {}) => {
   try {
-    await addDoc(collection(db, 'logs'), {
-      userId: auth.currentUser?.uid || 'guest',
-      event,
-      metadata,
-      timestamp: serverTimestamp(),
-      userAgent: typeof window !== 'undefined' ? window.navigator.userAgent : 'server'
-    });
+    const { data: { user } } = await supabase.auth.getUser();
+    await supabase
+      .from('logs')
+      .insert({
+        user_id: user?.id || 'guest',
+        event,
+        metadata,
+        timestamp: new Date().toISOString(),
+        user_agent: typeof window !== 'undefined' ? window.navigator.userAgent : 'server'
+      });
   } catch (error) {
     console.warn('Logging failed', error);
   }

@@ -18,13 +18,12 @@ import {
   ChevronDown,
   ChevronUp
 } from 'lucide-react';
-import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { auth, googleProvider, db } from '../lib/firebase';
+import { supabase } from '../lib/supabase';
 import { analyzeDecision } from '../lib/gemini';
 import { checkUsage, logDecision, logAppEvent } from '../lib/tracking';
 import { generateDecisionPDF } from '../lib/pdf-export';
 import { ErrorBoundary } from '../components/ErrorBoundary';
-import { Download, Copy, Check } from 'lucide-react';
+import { Download, Copy, Check, Share2 } from 'lucide-react';
 
 // Types
 interface AnalysisResult {
@@ -65,7 +64,7 @@ const CopyButton = ({ text, label }: { text: string; label: string }) => {
 };
 
 export default function DecisionPage() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<any>(null);
   const [input, setInput] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -73,6 +72,8 @@ export default function DecisionPage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [vocabMode, setVocabMode] = useState<'precise' | 'regular'>('precise');
   const [isNuanceExpanded, setIsNuanceExpanded] = useState(false);
+  const [shareId, setShareId] = useState<string | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
 
   // Quote logic
   const mainQuote = "The strongest decisions are forged in the fire of their own potential failure.";
@@ -83,28 +84,43 @@ export default function DecisionPage() {
   };
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
+    const fetchUser = async () => {
+      const { data: { user: u } } = await supabase.auth.getUser();
       setUser(u);
       setAuthLoading(false);
       refreshUsage();
+    };
+
+    fetchUser();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      refreshUsage();
     });
-    return () => unsub();
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const handleLogin = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
-      logAppEvent('user_login');
+      await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: typeof window !== 'undefined' ? window.location.origin : '',
+        }
+      });
+      logAppEvent('user_login_attempt');
     } catch (err) {
       console.error(err);
     }
   };
 
   const handleLogout = async () => {
-    await signOut(auth);
+    await supabase.auth.signOut();
     logAppEvent('user_logout');
     setResult(null);
     setInput('');
+    setShareId(null);
   };
 
   const handleAnalyze = async () => {
@@ -125,7 +141,8 @@ export default function DecisionPage() {
         latencyMs: latency,
       };
 
-      await logDecision(user?.uid || 'demo', analysisData);
+      const logId = await logDecision(user?.id || 'demo', analysisData);
+      setShareId(logId as string);
       setResult(rawResult);
       refreshUsage();
       logAppEvent('analysis_success', { latency, verdict: rawResult.verdict });
@@ -136,6 +153,15 @@ export default function DecisionPage() {
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  const handleShare = async () => {
+    if (!shareId) return;
+    const shareUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/share/${shareId}`;
+    await navigator.clipboard.writeText(shareUrl);
+    setIsSharing(true);
+    logAppEvent('share_link_copied', { shareId });
+    setTimeout(() => setIsSharing(false), 2000);
   };
 
   const getVerdictStyles = (v: string) => {
@@ -234,7 +260,7 @@ export default function DecisionPage() {
                     </span>
                   )}
                   {user && <span className="text-gray-700">|</span>}
-                  {user && <span className="text-gray-500">UID: {user.uid.slice(0, 8)}...</span>}
+                  {user && <span className="text-gray-500">UID: {user.id.slice(0, 8)}...</span>}
                 </div>
 
                 <button 
